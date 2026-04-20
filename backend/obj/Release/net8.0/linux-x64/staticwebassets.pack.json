@@ -1,0 +1,25 @@
+{
+  "Files": [
+    {
+      "Id": "D:\\Work\\web\\log-viewer\\backend\\wwwroot\\css\\app.css",
+      "PackagePath": "staticwebassets\\css\\app.css"
+    },
+    {
+      "Id": "obj\\Release\\net8.0\\linux-x64\\staticwebassets\\msbuild.LogViewer.Api.Microsoft.AspNetCore.StaticWebAssets.props",
+      "PackagePath": "build\\Microsoft.AspNetCore.StaticWebAssets.props"
+    },
+    {
+      "Id": "obj\\Release\\net8.0\\linux-x64\\staticwebassets\\msbuild.build.LogViewer.Api.props",
+      "PackagePath": "build\\LogViewer.Api.props"
+    },
+    {
+      "Id": "obj\\Release\\net8.0\\linux-x64\\staticwebassets\\msbuild.buildMultiTargeting.LogViewer.Api.props",
+      "PackagePath": "buildMultiTargeting\\LogViewer.Api.props"
+    },
+    {
+      "Id": "obj\\Release\\net8.0\\linux-x64\\staticwebassets\\msbuild.buildTransitive.LogViewer.Api.props",
+      "PackagePath": "buildTransitive\\LogViewer.Api.props"
+    }
+  ],
+  "ElementsToRemove": []
+}

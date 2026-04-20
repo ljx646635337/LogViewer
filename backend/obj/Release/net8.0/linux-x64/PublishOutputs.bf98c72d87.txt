@@ -1,0 +1,4 @@
+D:\Work\web\log-viewer\publish-linux\appsettings.Development.json
+D:\Work\web\log-viewer\publish-linux\appsettings.json
+D:\Work\web\log-viewer\publish-linux\LogViewer.Api.pdb
+D:\Work\web\log-viewer\publish-linux\LogViewer.Api

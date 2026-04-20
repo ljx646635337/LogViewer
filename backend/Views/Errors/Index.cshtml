@@ -1,0 +1,386 @@
+@{
+    ViewData["Title"] = "错误日志查看器";
+    var pathBase = ViewContext.HttpContext.Request.PathBase.Value ?? "";
+    var apiBase = pathBase + "/api";
+    // 计算今天 00:00 和当前时间，用于 datetime-local 输入框默认值
+    var now = DateTime.Now;
+    var todayStart = new DateTime(now.Year, now.Month, now.Day, 0, 0, 0);
+    var fmt = "yyyy-MM-ddTHH:mm";
+}
+
+<div id="app">
+    <!-- Header -->
+    <header class="lv-header">
+        <a class="lv-back-btn" href="/logViewer">← 返回主界面</a>
+        <h1>🔍 错误日志查看器</h1>
+        <div class="lv-header-right">
+            <div class="lv-status-dot"></div>
+            <span class="lv-status-text">实时监听中</span>
+            <button class="lv-btn lv-btn-sm" onclick="window.toggleTestPanel()">🧪 测试上报</button>
+        </div>
+    </header>
+
+    <!-- 测试上报面板 -->
+    <div class="lv-test-panel" v-if="showTestPanel">
+        <h3>🧪 测试日志上报</h3>
+        <div class="lv-test-form">
+            <div class="lv-test-row">
+                <label>Level</label>
+                <select v-model="testForm.level">
+                    <option>error</option>
+                    <option>warn</option>
+                </select>
+            </div>
+            <div class="lv-test-row">
+                <label>Cluster</label>
+                <input v-model="testForm.cluster_name" placeholder="cluster-game" />
+            </div>
+            <div class="lv-test-row">
+                <label>Node</label>
+                <input v-model="testForm.node_name" placeholder="node-01" />
+            </div>
+            <div class="lv-test-row">
+                <label>Tag</label>
+                <input v-model="testForm.tag" placeholder="battle" />
+            </div>
+            <div class="lv-test-row" style="flex:1">
+                <label>Msg</label>
+                <textarea v-model="testForm.msg" placeholder="错误信息..." rows="3"></textarea>
+            </div>
+            <button class="lv-btn lv-btn-primary" onclick="window.submitTestLog()">发送</button>
+        </div>
+        <div v-if="testResult" class="lv-test-result" :class="testResult.ok ? 'ok' : 'err'">
+            {{ testResult.ok ? '✅ 上报成功 ID=' + testResult.id : '❌ ' + testResult.error }}
+        </div>
+    </div>
+
+    <!-- 主内容 -->
+    <main class="lv-content">
+        <!-- ===== Filter Bar ===== -->
+        <div class="lv-filter">
+            <div class="lv-filter-item">
+                <label>日志级别</label>
+                <div class="lv-select">
+                    <select v-model="filters.level" @@change="onFilterChange">
+                        <option value="">全部级别</option>
+                        <option value="error">error</option>
+                        <option value="warn">warn</option>
+                    </select>
+                </div>
+            </div>
+            <div class="lv-filter-item">
+                <label>集群名称</label>
+                <div class="lv-select">
+                    <select v-model="filters.cluster_name" @@change="onFilterChange">
+                        <option value="">全部集群</option>
+                        <option value="server1">server1</option>
+                        <option value="server2">server2</option>
+                        <option value="server3">server3</option>
+                        <option value="server4">server4</option>
+                        <option value="server5">server5</option>
+                        <option value="server6">server6</option>
+                    </select>
+                </div>
+            </div>
+            <div class="lv-filter-item">
+                <label>节点名称</label>
+                <div class="lv-select">
+                    <select v-model="filters.node_name" @@change="onFilterChange">
+                        <option value="">全部节点</option>
+                        <option value="scene1">scene1</option>
+                        <option value="scene2">scene2</option>
+                        <option value="game1">game1</option>
+                        <option value="game2">game2</option>
+                        <option value="center1">center1</option>
+                        <option value="center2">center2</option>
+                        <option value="bridge1">bridge1</option>
+                        <option value="bridge2">bridge2</option>
+                        <option value="dbproxy1">dbproxy1</option>
+                        <option value="dbproxy2">dbproxy2</option>
+                    </select>
+                </div>
+            </div>
+            <div class="lv-filter-item">
+                <label>标签</label>
+                <input type="text" class="lv-input" v-model="filters.tag" @@input="debouncedSearch" placeholder="输入标签..." />
+            </div>
+            <div class="lv-filter-item">
+                <label>时间范围</label>
+                <div class="dtp-wrap">
+                    <input class="lv-input dtp-input" id="dtpStart" type="datetime-local" value="@todayStart.ToString(fmt)" />
+                    <span style="padding:0 6px;color:#666;font-size:12px">至</span>
+                    <input class="lv-input dtp-input" id="dtpEnd" type="datetime-local" value="@now.ToString(fmt)" />
+                </div>
+            </div>
+            <div class="lv-filter-item">
+                <label>关键词搜索</label>
+                <input type="text" class="lv-input" v-model="filters.keyword" @@input="debouncedSearch" placeholder="搜索 msg 内容..." style="width:240px" />
+            </div>
+            <div class="lv-filter-actions">
+                <button class="lv-btn lv-btn-primary" @@click="search">🔍 搜索</button>
+                <button class="lv-btn lv-btn-secondary" @@click="refresh">↻ 刷新</button>
+            </div>
+        </div>
+
+        <!-- ===== Log Table ===== -->
+        <div class="lv-table-wrap">
+            <table class="lv-table" v-if="logs.length > 0">
+                <thead>
+                    <tr>
+                        <th style="width:140px">时间</th>
+                        <th style="width:80px">级别</th>
+                        <th style="width:120px">集群</th>
+                        <th style="width:120px">节点</th>
+                        <th style="width:90px">标签</th>
+                        <th>消息内容</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <template v-for="log in logs" :key="log.id">
+                        <tr class="lv-row">
+                            <td class="lv-time">{{formatTime(log.time_ms)}}</td>
+                            <td><span :class="'lv-level lv-level-' + log.level">{{log.level}}</span></td>
+                            <td><span class="lv-tag">{{log.cluster_name || '—'}}</span></td>
+                            <td><span class="lv-tag">{{log.node_name || '—'}}</span></td>
+                            <td>
+                                <span class="lv-tag" v-if="log.tag">{{log.tag}}</span>
+                                <span v-else class="lv-dash">—</span>
+                            </td>
+                            <td class="lv-msg-cell">
+                                <div class="lv-msg-preview">{{log.msg}}</div>
+                                <div v-if="log.traceback" class="lv-toggle" onclick="window.toggleTraceback(this.dataset.id)" :data-id="log.id">
+                                    <span :class="'lv-arrow ' + (expandedIds.has(log.id) ? 'expanded' : '')">▶</span>
+                                    {{ expandedIds.has(log.id) ? '收起堆栈' : '展开堆栈' }}
+                                </div>
+                                <div v-if="log.traceback && expandedIds.has(log.id)" class="lv-traceback">
+                                    <pre>{{log.traceback}}</pre>
+                                </div>
+                            </td>
+                        </tr>
+                    </template>
+                </tbody>
+            </table>
+
+            <!-- Empty State -->
+            <div class="lv-empty" v-else-if="!loading">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="56" height="56">
+                    <path d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+                </svg>
+                <p>{{loading ? '加载中...' : '暂无日志记录'}}</p>
+            </div>
+
+            <!-- Loading -->
+            <div class="lv-loading" v-if="loading">
+                <div class="lv-spinner"></div>
+                <span>加载中...</span>
+            </div>
+
+            <!-- Pagination -->
+            <div class="lv-pagination" v-if="total > 0 && !loading">
+                <div class="lv-page-info">
+                    共 {{total}} 条，当前第 {{page}} / {{totalPages}} 页
+                    <span class="lv-page-size">
+                        <select v-model.number="pageSize" @@change="onPageSizeChange">
+                            <option :value="10">10/页</option>
+                            <option :value="20">20/页</option>
+                            <option :value="50">50/页</option>
+                            <option :value="100">100/页</option>
+                        </select>
+                    </span>
+                </div>
+                <div class="lv-page-btns">
+                    <button class="lv-page-btn" @@click="page=1" :disabled="page===1">«</button>
+                    <button class="lv-page-btn" @@click="page--" :disabled="page===1">‹</button>
+                    <button v-for="p in visiblePages" :key="p" class="lv-page-btn" :class="{active: p===page}" @@click="page=p">{{p}}</button>
+                    <button class="lv-page-btn" @@click="page++" :disabled="page===totalPages">›</button>
+                    <button class="lv-page-btn" @@click="page=totalPages" :disabled="page===totalPages">»</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+</div>
+
+@section Styles {
+<link rel="stylesheet" href="~/css/app.css" />
+<style>
+.lv-back-btn { color: #fff; text-decoration: none; font-size: 14px; padding: 4px 10px; background: rgba(255,255,255,0.15); border-radius: 4px; margin-right: 12px; }
+.lv-back-btn:hover { background: rgba(255,255,255,0.25); }
+.dtp-wrap { display: flex; align-items: center; gap: 4px; }
+.dtp-input { width: 196px !important; font-size: 13px; cursor: pointer; }
+.dtp-input::-webkit-calendar-picker-indicator { cursor: pointer; filter: invert(0.6); }
+</style>
+}
+
+@section Scripts {
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script>
+const { createApp, ref, computed, watch, onMounted, onUnmounted } = Vue;
+const apiBase = '@apiBase';
+
+const app = createApp({
+    setup() {
+        // State
+        const logs = ref([]);
+        const total = ref(0);
+        const page = ref(1);
+        const pageSize = ref(20);
+        const loading = ref(false);
+        const expandedIds = ref(new Set());
+        const showTestPanel = ref(false);
+        const testResult = ref(null);
+
+        const filters = ref({
+            level: '',
+            cluster_name: '',
+            node_name: '',
+            tag: '',
+            keyword: '',
+            start_time: 0,
+            end_time: 0
+        });
+        const options = ref({ tags: [] });
+        const testForm = ref({
+            level: 'error',
+            cluster_name: '1',
+            node_name: 'scene1',
+            tag: '',
+            msg: ''
+        });
+
+        // Computed
+        const totalPages = computed(() => Math.ceil(total.value / pageSize.value) || 1);
+        const visiblePages = computed(() => {
+            const pages = [];
+            const t = totalPages.value;
+            let s = Math.max(1, page.value - 2);
+            let e = Math.min(t, s + 4);
+            if (e - s < 4) s = Math.max(1, e - 4);
+            for (let i = s; i <= e; i++) pages.push(i);
+            return pages;
+        });
+
+        // Debounce
+        let searchTimer = null;
+        const debouncedSearch = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => search(), 400); };
+
+        // Actions
+        const fetchLogs = async () => {
+            loading.value = true;
+            try {
+                const params = new URLSearchParams();
+                if (filters.value.level) params.append('level', filters.value.level);
+                if (filters.value.cluster_name) params.append('cluster_name', filters.value.cluster_name);
+                if (filters.value.node_name) params.append('node_name', filters.value.node_name);
+                if (filters.value.tag) params.append('tag', filters.value.tag);
+                if (filters.value.keyword) params.append('keyword', filters.value.keyword);
+
+                // 时间范围：直接读 DOM 输入框的值
+                const dtpStart = document.getElementById('dtpStart');
+                const dtpEnd = document.getElementById('dtpEnd');
+                let startTs = filters.value.start_time || 0;
+                let endTs = filters.value.end_time || 0;
+                if (startTs > 0) params.append('start_time', startTs);
+                if (endTs > 0) params.append('end_time', endTs);
+
+                params.append('page', page.value);
+                params.append('page_size', pageSize.value);
+                const res = await fetch(apiBase + '/logs?' + params.toString());
+                const data = await res.json();
+                logs.value = data.items || [];
+                total.value = data.total || 0;
+            } catch (e) { console.error('Failed to fetch logs:', e); }
+            finally { loading.value = false; }
+        };
+
+        const submitTestLog = async () => {
+            try {
+                testResult.value = null;
+                const body = { ...testForm.value, title: testForm.value.msg.split('\n')[0].substring(0, 50), time_ms: Date.now() };
+                const res = await fetch(apiBase + '/logs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                const data = await res.json();
+                testResult.value = { ok: true, id: data.id };
+                refresh();
+            } catch (e) { testResult.value = { ok: false, error: e.message }; }
+        };
+
+        const toggleTestPanel = () => { showTestPanel.value = !showTestPanel.value; };
+        const search = () => { page.value = 1; fetchLogs(); };
+        const refresh = () => { fetchLogs(); };
+        const onFilterChange = () => { page.value = 1; /* 等用户点搜索 */ };
+        const onPageSizeChange = () => { page.value = 1; fetchLogs(); };
+
+        const toggleTraceback = (id) => {
+            const numId = parseInt(id);
+            if (expandedIds.value.has(numId)) {
+                expandedIds.value.delete(numId);
+            } else {
+                expandedIds.value.add(numId);
+            }
+            expandedIds.value = new Set(expandedIds.value);
+        };
+        // 暴露给 onclick 使用
+        window.toggleTraceback = toggleTraceback;
+        window.submitTestLog = submitTestLog;
+        window.toggleTestPanel = toggleTestPanel;
+
+        const formatTime = (timeMs) => {
+            if (!timeMs) return '—';
+            const d = new Date(timeMs);
+            const p = n => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+        };
+
+        watch(page, fetchLogs);
+
+        onMounted(() => {
+            fetchLogs();
+
+            // 初始化 filters：DOM 有值就读 DOM，否则 JS 计算默认值
+            const dtpStart = document.getElementById('dtpStart');
+            const dtpEnd = document.getElementById('dtpEnd');
+            if (dtpStart.value) {
+                filters.value.start_time = new Date(dtpStart.value).getTime();
+            } else {
+                // 当日 00:00
+                const now = new Date();
+                filters.value.start_time = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0).getTime();
+            }
+            if (dtpEnd.value) {
+                filters.value.end_time = new Date(dtpEnd.value).getTime();
+            } else {
+                // 当前时间
+                filters.value.end_time = Date.now();
+            }
+
+            // 时间变化只更新值，等用户点搜索
+            dtpStart.addEventListener('change', () => {
+                filters.value.start_time = dtpStart.value ? new Date(dtpStart.value).getTime() : null;
+            });
+            dtpEnd.addEventListener('change', () => {
+                filters.value.end_time = dtpEnd.value ? new Date(dtpEnd.value).getTime() : null;
+            });
+        });
+
+        onUnmounted(() => { clearTimeout(searchTimer); });
+
+        return {
+            logs, total, page, pageSize, loading, expandedIds,
+            showTestPanel, testForm, testResult,
+            filters, options,
+            totalPages, visiblePages,
+            debouncedSearch, fetchLogs, submitTestLog,
+            toggleTestPanel, search, refresh, onFilterChange, onPageSizeChange,
+            toggleTraceback, formatTime,
+            submitTestLog
+        };
+    },
+    methods: {
+        toggleTestPanel() { this.showTestPanel = !this.showTestPanel; },
+        submitTestLog() { this._submitTestLog ? this._submitTestLog() : this.submitTestLog(); }
+    }
+});
+
+app.mount('#app');
+</script>
+}
