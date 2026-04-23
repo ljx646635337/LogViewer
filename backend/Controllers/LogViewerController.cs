@@ -17,10 +17,11 @@ public class LogViewerController : Controller
 
     public async Task<IActionResult> Index()
     {
-        // 今日 error 数（用本地时间）
-        var todayStart = DateTime.Today;
+        // 今日 error 数（Skynet time_ms 是 UTC 时间戳，需要 +8 转北京时间）
+        var todayStartUtc = DateTime.UtcNow.Date;
+        var todayStartTs = new DateTimeOffset(todayStartUtc).ToUnixTimeMilliseconds();
         var todayErrorCount = await _db.ErrorLogs
-            .Where(l => l.Level == "error" && l.TimeMs >= new DateTimeOffset(todayStart).ToUnixTimeMilliseconds())
+            .Where(l => l.Level == "error" && l.TimeMs >= todayStartTs)
             .CountAsync();
 
         // 总记录数

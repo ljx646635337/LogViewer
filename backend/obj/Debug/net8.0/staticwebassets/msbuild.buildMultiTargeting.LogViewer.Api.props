@@ -1,3 +1,0 @@
-﻿<Project>
-  <Import Project="..\build\LogViewer.Api.props" />
-</Project>

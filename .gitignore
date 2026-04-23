@@ -1,6 +1,7 @@
 # .NET 编译产物
-bin/
-obj/
+backend/bin/
+backend/obj/
+publish-linux/
 
 # 建议顺便加上 IDE 配置文件（你截图里也有这些被修改了）
 .idea/

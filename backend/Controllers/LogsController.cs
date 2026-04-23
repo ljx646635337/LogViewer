@@ -62,8 +62,8 @@ public class LogsController : ControllerBase
                 Title = dto.Title ?? "",
                 Msg = dto.Msg ?? "",
                 Traceback = traceback,
-                TimeMs = dto.TimeMs > 0 ? dto.TimeMs : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                CreatedAt = DateTime.UtcNow
+                TimeMs = dto.TimeMs,
+                CreatedAt = DateTime.UtcNow.AddHours(8)
             };
 
             _db.ErrorLogs.Add(entity);
