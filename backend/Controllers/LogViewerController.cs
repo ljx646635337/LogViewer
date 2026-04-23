@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using LogViewer.Api.Data;
 using Microsoft.EntityFrameworkCore;
+using LogViewer.Api.Services;
 
 namespace LogViewer.Api.Controllers;
 
@@ -8,35 +9,24 @@ public class LogViewerController : Controller
 {
     private readonly AppDbContext _db;
     private readonly ILogger<LogViewerController> _logger;
+    private readonly LogCacheService _cache;
 
-    public LogViewerController(AppDbContext db, ILogger<LogViewerController> logger)
+    public LogViewerController(AppDbContext db, ILogger<LogViewerController> logger, LogCacheService cache)
     {
         _db = db;
         _logger = logger;
+        _cache = cache;
     }
 
     public async Task<IActionResult> Index()
     {
-        // 今日 error 数（Skynet time_ms 是 UTC 时间戳，需要 +8 转北京时间）
-        var todayStartUtc = DateTime.UtcNow.Date;
-        var todayStartTs = new DateTimeOffset(todayStartUtc).ToUnixTimeMilliseconds();
-        var todayErrorCount = await _db.ErrorLogs
-            .Where(l => l.Level == "error" && l.TimeMs >= todayStartTs)
-            .CountAsync();
-
-        // 总记录数
-        var totalCount = await _db.ErrorLogs.CountAsync();
-
-        // 最后上报时间
-        var lastLog = await _db.ErrorLogs
-            .OrderByDescending(l => l.TimeMs)
-            .Select(l => (long?)l.TimeMs)
-            .FirstOrDefaultAsync();
+        // 从缓存获取统计数据
+        var (todayErrorCount, totalCount, lastLogTime) = await _cache.GetStatsAsync();
 
         ViewData["TodayErrorCount"] = todayErrorCount;
         ViewData["TotalCount"] = totalCount;
-        ViewData["LastLogTime"] = lastLog > 0
-            ? DateTimeOffset.FromUnixTimeMilliseconds(lastLog.Value).ToString("yyyy-MM-dd HH:mm:ss")
+        ViewData["LastLogTime"] = lastLogTime > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(lastLogTime).ToString("yyyy-MM-dd HH:mm:ss")
             : "—";
 
         return View();

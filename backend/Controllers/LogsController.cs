@@ -19,6 +19,7 @@ public class LogsController : ControllerBase
     private readonly AppDbContext _db;
     private readonly ILogger<LogsController> _logger;
     private readonly FeishuNotifier _feishu;
+    private readonly LogCacheService _cache;
 
     // Traceback 特征模式：从 msg 中提取堆栈信息
     private static readonly Regex[] TracebackPatterns = new[]
@@ -33,11 +34,12 @@ public class LogsController : ControllerBase
         new Regex(@"(?:at|in) .+\(.+\)(?:\s+in .+:\w+)?", RegexOptions.Multiline),
     };
 
-    public LogsController(AppDbContext db, ILogger<LogsController> logger, FeishuNotifier feishu)
+    public LogsController(AppDbContext db, ILogger<LogsController> logger, FeishuNotifier feishu, LogCacheService cache)
     {
         _db = db;
         _logger = logger;
         _feishu = feishu;
+        _cache = cache;
     }
 
     // ===== 1. Skynet 上报日志 =====
@@ -73,23 +75,26 @@ public class LogsController : ControllerBase
                 "[Ingest] id={Id} level={Level} cluster={Cluster} node={Node}",
                 entity.Id, entity.Level, entity.ClusterName, entity.NodeName);
 
+            // 追加到缓存
+            var logItem = new LogItemDto
+            {
+                Id = entity.Id,
+                Level = entity.Level,
+                ClusterName = entity.ClusterName,
+                NodeName = entity.NodeName,
+                Tag = entity.Tag,
+                Title = entity.Title,
+                Msg = entity.Msg,
+                Traceback = entity.Traceback,
+                TimeMs = entity.TimeMs,
+                CreatedAt = entity.CreatedAt
+            };
+            _cache.AppendLog(logItem);
+
             // 飞书通知（异步，不阻塞返回）
             if (_feishu.ShouldNotify(entity.Level))
             {
-                var item = new LogItemDto
-                {
-                    Id = entity.Id,
-                    Level = entity.Level,
-                    ClusterName = entity.ClusterName,
-                    NodeName = entity.NodeName,
-                    Tag = entity.Tag,
-                    Title = entity.Title,
-                    Msg = entity.Msg,
-                    Traceback = entity.Traceback,
-                    TimeMs = entity.TimeMs,
-                    CreatedAt = entity.CreatedAt
-                };
-                _ = _feishu.NotifyAsync(item); // fire-and-forget
+                _ = _feishu.NotifyAsync(logItem); // fire-and-forget
             }
 
             return Ok(new LogIngestResultDto { Ok = true, Id = entity.Id });
@@ -110,71 +115,20 @@ public class LogsController : ControllerBase
     public async Task<ActionResult<LogPagedResultDto>> Query([FromQuery] LogQueryDto query)
     {
         // 空值时设置默认值：start_time 当天 00:00，end_time 当前时间
-        var nowTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var todayStartTs = new DateTimeOffset(DateTime.UtcNow.Date).ToUnixTimeMilliseconds();
+        var nowTs = DateTimeOffset.UtcNow.AddHours(8).ToUnixTimeMilliseconds();
+        var todayStartTs = new DateTimeOffset(DateTime.UtcNow.Date.AddHours(8)).ToUnixTimeMilliseconds();
         var effectiveStartTime = query.start_time > 0 ? query.start_time : todayStartTs;
         var effectiveEndTime = query.end_time > 0 ? query.end_time : nowTs;
+
+        query.start_time = effectiveStartTime;
+        query.end_time = effectiveEndTime;
 
         _logger.LogInformation("[Query] start_time={StartTime} end_time={EndTime} level={Level} cluster={Cluster}",
             effectiveStartTime, effectiveEndTime, query.level, query.cluster_name);
 
-        var queryable = _db.ErrorLogs.AsNoTracking();
-
-        // 过滤条件
-        if (!string.IsNullOrWhiteSpace(query.level))
-            queryable = queryable.Where(l => l.Level == query.level.ToLowerInvariant());
-
-        if (!string.IsNullOrWhiteSpace(query.cluster_name))
-            queryable = queryable.Where(l => l.ClusterName == query.cluster_name);
-
-        if (!string.IsNullOrWhiteSpace(query.node_name))
-            queryable = queryable.Where(l => l.NodeName == query.node_name);
-
-        if (!string.IsNullOrWhiteSpace(query.tag))
-            queryable = queryable.Where(l => l.Tag == query.tag);
-
-        if (!string.IsNullOrWhiteSpace(query.keyword))
-            queryable = queryable.Where(l => l.Msg.Contains(query.keyword));
-
-        if (effectiveStartTime > 0)
-            queryable = queryable.Where(l => l.TimeMs >= effectiveStartTime);
-
-        if (effectiveEndTime > 0)
-            queryable = queryable.Where(l => l.TimeMs <= effectiveEndTime);
-
-        // 总数
-        var total = await queryable.CountAsync();
-
-        // 分页 + 按时间倒序
-        var page = Math.Max(1, query.page);
-        var pageSize = Math.Clamp(query.page_size, 1, 100);
-
-        var items = await queryable
-            .OrderByDescending(l => l.TimeMs)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .Select(l => new LogItemDto
-            {
-                Id = l.Id,
-                Level = l.Level,
-                ClusterName = l.ClusterName,
-                NodeName = l.NodeName,
-                Tag = l.Tag,
-                Title = l.Title,
-                Msg = l.Msg,
-                Traceback = l.Traceback,
-                TimeMs = l.TimeMs,
-                CreatedAt = l.CreatedAt
-            })
-            .ToListAsync();
-
-        return Ok(new LogPagedResultDto
-        {
-            Items = items,
-            Total = total,
-            Page = page,
-            PageSize = pageSize
-        });
+        // 走缓存服务
+        var result = await _cache.QueryAsync(query);
+        return Ok(result);
     }
 
     // ===== 3. 获取过滤选项枚举 =====

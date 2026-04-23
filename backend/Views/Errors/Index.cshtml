@@ -2,8 +2,8 @@
     ViewData["Title"] = "错误日志查看器";
     var pathBase = ViewContext.HttpContext.Request.PathBase.Value ?? "";
     var apiBase = pathBase + "/api";
-    // 计算今天 00:00 和当前时间，用于 datetime-local 输入框默认值
-    var now = DateTime.Now;
+    // 统一用北京时间（东8区），确保前后端一致
+    var now = DateTime.UtcNow.AddHours(8);
     var todayStart = new DateTime(now.Year, now.Month, now.Day, 0, 0, 0);
     var fmt = "yyyy-MM-ddTHH:mm";
 }
@@ -102,7 +102,7 @@
             </div>
             <div class="lv-filter-item">
                 <label>标签</label>
-                <input type="text" class="lv-input" v-model="filters.tag" @@input="debouncedSearch" placeholder="输入标签..." />
+                <input type="text" class="lv-input" v-model="filters.tag" placeholder="输入标签..." />
             </div>
             <div class="lv-filter-item">
                 <label>时间范围</label>
@@ -114,11 +114,14 @@
             </div>
             <div class="lv-filter-item">
                 <label>关键词搜索</label>
-                <input type="text" class="lv-input" v-model="filters.keyword" @@input="debouncedSearch" placeholder="搜索 msg 内容..." style="width:240px" />
+                <input type="text" class="lv-input" v-model="filters.keyword" placeholder="搜索 msg 内容..." style="width:240px" />
             </div>
             <div class="lv-filter-actions">
                 <button class="lv-btn lv-btn-primary" @@click="search">🔍 搜索</button>
-                <button class="lv-btn lv-btn-secondary" @@click="refresh">↻ 刷新</button>
+                <button class="lv-btn lv-btn-secondary" @@click="refreshWithCooldown" :disabled="cooldownRemaining > 0">
+                    <span v-if="cooldownRemaining > 0">↻ {{ cooldownRemaining }}s</span>
+                    <span v-else>↻ 刷新</span>
+                </button>
             </div>
         </div>
 
@@ -275,13 +278,17 @@ const app = createApp({
                 if (filters.value.tag) params.append('tag', filters.value.tag);
                 if (filters.value.keyword) params.append('keyword', filters.value.keyword);
 
-                // 时间范围：直接读 DOM 输入框的值
+                // 直接读 DOM 输入框的值（避免响应式延迟）
                 const dtpStart = document.getElementById('dtpStart');
                 const dtpEnd = document.getElementById('dtpEnd');
-                let startTs = filters.value.start_time || 0;
-                let endTs = filters.value.end_time || 0;
-                if (startTs > 0) params.append('start_time', startTs);
-                if (endTs > 0) params.append('end_time', endTs);
+                if (dtpStart && dtpStart.value) {
+                    const ts = new Date(dtpStart.value).getTime();
+                    if (ts > 0) params.append('start_time', ts);
+                }
+                if (dtpEnd && dtpEnd.value) {
+                    const ts = new Date(dtpEnd.value).getTime();
+                    if (ts > 0) params.append('end_time', ts);
+                }
 
                 params.append('page', page.value);
                 params.append('page_size', pageSize.value);
@@ -306,7 +313,34 @@ const app = createApp({
 
         const toggleTestPanel = () => { showTestPanel.value = !showTestPanel.value; };
         const search = () => { page.value = 1; fetchLogs(); };
-        const refresh = () => { fetchLogs(); };
+        const refresh = async () => {
+            const res = await fetch('/logViewer/errors/refresh');
+            const data = await res.json();
+            if (!data.ok) {
+                alert(data.error);
+                return;
+            }
+            fetchLogs();
+        };
+
+        // 冷却倒计时
+        let cooldownTimer = null;
+        const cooldownRemaining = ref(0);
+        const startCooldownTimer = () => {
+            clearInterval(cooldownTimer);
+            cooldownRemaining.value = 3;
+            cooldownTimer = setInterval(async () => {
+                const res = await fetch('/logViewer/errors/cooldown');
+                const data = await res.json();
+                cooldownRemaining.value = Math.ceil(data.cooldownRemaining);
+                if (cooldownRemaining.value <= 0) clearInterval(cooldownTimer);
+            }, 200);
+        };
+        // 点击刷新时启动冷却
+        const refreshWithCooldown = async () => {
+            refresh();
+            startCooldownTimer();
+        };
         const onFilterChange = () => { page.value = 1; /* 等用户点搜索 */ };
         const onPageSizeChange = () => { page.value = 1; fetchLogs(); };
 
@@ -334,19 +368,17 @@ const app = createApp({
         watch(page, fetchLogs);
 
         onMounted(() => {
-            fetchLogs();
-
             // 初始化 filters：DOM 有值就读 DOM，否则 JS 计算默认值
             const dtpStart = document.getElementById('dtpStart');
             const dtpEnd = document.getElementById('dtpEnd');
-            if (dtpStart.value) {
+            if (dtpStart && dtpStart.value) {
                 filters.value.start_time = new Date(dtpStart.value).getTime();
             } else {
                 // 当日 00:00
                 const now = new Date();
                 filters.value.start_time = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0).getTime();
             }
-            if (dtpEnd.value) {
+            if (dtpEnd && dtpEnd.value) {
                 filters.value.end_time = new Date(dtpEnd.value).getTime();
             } else {
                 // 当前时间
@@ -360,6 +392,9 @@ const app = createApp({
             dtpEnd.addEventListener('change', () => {
                 filters.value.end_time = dtpEnd.value ? new Date(dtpEnd.value).getTime() : null;
             });
+
+            // 最后再获取日志
+            fetchLogs();
         });
 
         onUnmounted(() => { clearTimeout(searchTimer); });
@@ -367,10 +402,10 @@ const app = createApp({
         return {
             logs, total, page, pageSize, loading, expandedIds,
             showTestPanel, testForm, testResult,
-            filters, options,
+            filters, options, cooldownRemaining,
             totalPages, visiblePages,
             debouncedSearch, fetchLogs, submitTestLog,
-            toggleTestPanel, search, refresh, onFilterChange, onPageSizeChange,
+            toggleTestPanel, search, refreshWithCooldown, onFilterChange, onPageSizeChange,
             toggleTraceback, formatTime,
             submitTestLog
         };

@@ -3,7 +3,10 @@ using LogViewer.Api.Data;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ===== 0. 飞书通知服务 =====
+// ===== 0. 缓存服务 =====
+builder.Services.AddSingleton<LogViewer.Api.Services.LogCacheService>();
+
+// ===== 1. 飞书通知服务 =====
 builder.Services.AddScoped<LogViewer.Api.Services.FeishuNotifier>();
 
 // ===== 1. 数据库配置 =====
@@ -78,4 +81,21 @@ using (var scope = app.Services.CreateScope())
 }
 
 Console.WriteLine($"[LogViewer] Starting on http://localhost:5001{pathBase} (base: {pathBase})");
+
+// 启动时异步加载缓存
+_ = Task.Run(async () =>
+{
+    await Task.Delay(500); // 等待服务完全启动
+    try
+    {
+        var cache = app.Services.GetRequiredService<LogViewer.Api.Services.LogCacheService>();
+        await cache.WarmUpAsync();
+        Console.WriteLine("[Cache] 缓存预热完成");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Cache] 缓存预热失败: {ex.Message}");
+    }
+});
+
 app.Run("http://localhost:5001");
