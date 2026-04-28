@@ -135,6 +135,7 @@
                         <th style="width:120px">集群</th>
                         <th style="width:120px">节点</th>
                         <th style="width:90px">标签</th>
+                        <th style="width:180px">消息头</th>
                         <th>消息内容</th>
                     </tr>
                 </thead>
@@ -147,6 +148,10 @@
                             <td><span class="lv-tag">{{log.node_name || '—'}}</span></td>
                             <td>
                                 <span class="lv-tag" v-if="log.tag">{{log.tag}}</span>
+                                <span v-else class="lv-dash">—</span>
+                            </td>
+                            <td class="lv-title-cell">
+                                <span v-if="log.title" :title="log.title">{{log.title}}</span>
                                 <span v-else class="lv-dash">—</span>
                             </td>
                             <td class="lv-msg-cell">
