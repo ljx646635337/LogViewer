@@ -31,7 +31,7 @@ public class LogCacheService
     {
         _sp = sp;
         _logger = logger;
-        _maxLogs = config.GetValue("Cache:MaxLogs", 10000);
+        _maxLogs = config.GetValue("Cache:MaxLogs", 5000);
         _cacheDays = config.GetValue("Cache:CacheDays", 7);
         _refreshCooldownSeconds = config.GetValue("Cache:RefreshCooldownSeconds", 3);
     }
@@ -145,7 +145,7 @@ public class LogCacheService
         if (cache != null)
         {
             var now = DateTimeOffset.UtcNow.AddHours(8);
-            var todayStart = new DateTimeOffset(now.Date).ToUnixTimeMilliseconds();
+            var todayStart = new DateTimeOffset(now.Year, now.Month, now.Day, 0, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeMilliseconds();
             var todayErrorCount = cache.AllLogs.Count(l => l.Level == "error" && l.TimeMs >= todayStart);
             var totalCount = cache.AllLogs.Count;
             var lastLogTime = cache.AllLogs.FirstOrDefault()?.TimeMs ?? 0;
@@ -158,7 +158,7 @@ public class LogCacheService
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
         var now2 = DateTimeOffset.UtcNow.AddHours(8);
-        var todayStart2 = new DateTimeOffset(now2.Date).ToUnixTimeMilliseconds();
+        var todayStart2 = new DateTimeOffset(now2.Year, now2.Month, now2.Day, 0, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeMilliseconds();
         var sevenDaysAgo = now2.AddDays(-_cacheDays).ToUnixTimeMilliseconds();
 
         var todayErrorCount2 = await db.ErrorLogs

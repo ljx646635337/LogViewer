@@ -197,11 +197,11 @@
                     </span>
                 </div>
                 <div class="lv-page-btns">
-                    <button class="lv-page-btn" @@click="page=1" :disabled="page===1">«</button>
-                    <button class="lv-page-btn" @@click="page--" :disabled="page===1">‹</button>
-                    <button v-for="p in visiblePages" :key="p" class="lv-page-btn" :class="{active: p===page}" @@click="page=p">{{p}}</button>
-                    <button class="lv-page-btn" @@click="page++" :disabled="page===totalPages">›</button>
-                    <button class="lv-page-btn" @@click="page=totalPages" :disabled="page===totalPages">»</button>
+                    <button class="lv-page-btn" @@click="gotoPage(1)" :disabled="page===1">«</button>
+                    <button class="lv-page-btn" @@click="gotoPage(page-1)" :disabled="page===1">‹</button>
+                    <button v-for="p in visiblePages" :key="p" class="lv-page-btn" :class="{active: p===page}" @@click="gotoPage(p)">{{p}}</button>
+                    <button class="lv-page-btn" @@click="gotoPage(page+1)" :disabled="page===totalPages">›</button>
+                    <button class="lv-page-btn" @@click="gotoPage(totalPages)" :disabled="page===totalPages">»</button>
                 </div>
             </div>
         </div>
@@ -268,10 +268,6 @@ const app = createApp({
             return pages;
         });
 
-        // Debounce
-        let searchTimer = null;
-        const debouncedSearch = () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => search(), 400); };
-
         // Actions
         const fetchLogs = async () => {
             loading.value = true;
@@ -318,14 +314,14 @@ const app = createApp({
 
         const toggleTestPanel = () => { showTestPanel.value = !showTestPanel.value; };
         const search = () => { page.value = 1; fetchLogs(); };
+        const gotoPage = (p) => { page.value = Math.max(1, Math.min(p, totalPages.value)); fetchLogs(); };
         const refresh = async () => {
-            const res = await fetch('/logViewer/errors/refresh');
-            const data = await res.json();
-            if (!data.ok) {
-                alert(data.error);
-                return;
-            }
-            fetchLogs();
+            try {
+                const res = await fetch('/logViewer/errors/refresh');
+                const data = await res.json();
+                if (!data.ok) { alert(data.error); return; }
+                fetchLogs();
+            } catch (e) { console.error('刷新失败:', e); alert('刷新失败，请检查网络'); }
         };
 
         // 冷却倒计时
@@ -370,7 +366,6 @@ const app = createApp({
             return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
         };
 
-        watch(page, fetchLogs);
 
         onMounted(() => {
             // 初始化 filters：DOM 有值就读 DOM，否则 JS 计算默认值
@@ -402,22 +397,17 @@ const app = createApp({
             fetchLogs();
         });
 
-        onUnmounted(() => { clearTimeout(searchTimer); });
+        onUnmounted(() => { });
 
         return {
             logs, total, page, pageSize, loading, expandedIds,
             showTestPanel, testForm, testResult,
             filters, options, cooldownRemaining,
             totalPages, visiblePages,
-            debouncedSearch, fetchLogs, submitTestLog,
-            toggleTestPanel, search, refreshWithCooldown, onFilterChange, onPageSizeChange,
-            toggleTraceback, formatTime,
-            submitTestLog
+            fetchLogs, submitTestLog,
+            toggleTestPanel, search, gotoPage, refreshWithCooldown, onFilterChange, onPageSizeChange,
+            toggleTraceback, formatTime
         };
-    },
-    methods: {
-        toggleTestPanel() { this.showTestPanel = !this.showTestPanel; },
-        submitTestLog() { this._submitTestLog ? this._submitTestLog() : this.submitTestLog(); }
     }
 });
 

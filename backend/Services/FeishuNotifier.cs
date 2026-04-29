@@ -30,8 +30,6 @@ public class FeishuNotifier
         var levelUpper = level?.ToUpperInvariant() ?? "";
         if (levelUpper == "ERROR" && _config.GetValue<bool>("Feishu:NotifyOnError"))
             return true;
-        if (levelUpper == "TRACE" && _config.GetValue<bool>("Feishu:NotifyOnTrace"))
-            return true;
 
         return false;
     }
