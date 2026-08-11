@@ -59,6 +59,7 @@ public class LogItemDto
     public string? Traceback { get; set; }
     [JsonPropertyName("time_ms")]
     public long TimeMs { get; set; }
+    [JsonPropertyName("created_at")]
     public DateTime CreatedAt { get; set; }
 }
 

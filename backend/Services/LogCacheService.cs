@@ -44,40 +44,53 @@ public class LogCacheService
         await RebuildCacheAsync();
     }
 
+    // ===== 北京时间（UTC+8） =====
+    private static DateTime NowBeijing => DateTime.UtcNow.AddHours(8);
+
+    /// <summary>
+    /// 将毫秒时间戳转换为北京时间 DateTime（与 CreatedAt 存储格式一致）
+    /// </summary>
+    private static DateTime? MsToBeijingDateTime(long? ms)
+    {
+        if (!ms.HasValue || ms <= 0) return null;
+        return DateTimeOffset.FromUnixTimeMilliseconds(ms.Value).UtcDateTime.AddHours(8);
+    }
+
     /// <summary>
     /// 查询日志（7天内走缓存，超出7天查DB）
+    /// 时间过滤基于 CreatedAt（报错入库时间），不依赖 TimeMs
     /// </summary>
     public async Task<LogPagedResultDto> QueryAsync(LogQueryDto query)
     {
-        var now = DateTimeOffset.UtcNow.AddHours(8); // 东八区当前时间
-        var sevenDaysAgo = now.AddDays(-_cacheDays).ToUnixTimeMilliseconds();
+        var now = NowBeijing;
+        var sevenDaysAgoDt = now.AddDays(-_cacheDays);
 
-        var startTs = query.start_time ?? 0;
-        var endTs = query.end_time ?? now.ToUnixTimeMilliseconds();
+        // 将前端传入的毫秒时间戳转为北京时间 DateTime，用于 created_at 过滤
+        var startDt = MsToBeijingDateTime(query.start_time);
+        var endDt = MsToBeijingDateTime(query.end_time);
 
         // 查询范围超出7天，直接查DB
-        if (endTs < sevenDaysAgo)
+        var effectiveEnd = endDt ?? now;
+        if (effectiveEnd < sevenDaysAgoDt)
         {
-            _logger.LogDebug("[Cache] 查询超出7天，直接查DB startTs={StartTs} endTs={EndTs}", startTs, endTs);
-            return await QueryFromDbAsync(query);
+            return await QueryFromDbAsync(query, startDt, endDt);
         }
 
         // 缓存为空，触发重建
         var cache = _cache;
         if (cache == null)
         {
-            _logger.LogDebug("[Cache] 缓存为空，触发重建");
             await RebuildCacheAsync();
             cache = _cache;
         }
 
         if (cache == null)
         {
-            return await QueryFromDbAsync(query);
+            return await QueryFromDbAsync(query, startDt, endDt);
         }
 
         // 从缓存查询
-        return QueryFromCache(cache, query);
+        return QueryFromCache(cache, query, startDt, endDt);
     }
 
     /// <summary>
@@ -144,9 +157,9 @@ public class LogCacheService
         // 缓存命中
         if (cache != null)
         {
-            var now = DateTimeOffset.UtcNow.AddHours(8);
-            var todayStart = new DateTimeOffset(now.Year, now.Month, now.Day, 0, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeMilliseconds();
-            var todayErrorCount = cache.AllLogs.Count(l => l.Level == "error" && l.TimeMs >= todayStart);
+            var now = NowBeijing;
+            var todayStart = new DateTime(now.Year, now.Month, now.Day, 0, 0, 0);
+            var todayErrorCount = cache.AllLogs.Count(l => l.Level == "error" && l.CreatedAt >= todayStart);
             var totalCount = cache.AllLogs.Count;
             var lastLogTime = cache.AllLogs.FirstOrDefault()?.TimeMs ?? 0;
 
@@ -157,20 +170,20 @@ public class LogCacheService
         using var scope = _sp.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        var now2 = DateTimeOffset.UtcNow.AddHours(8);
-        var todayStart2 = new DateTimeOffset(now2.Year, now2.Month, now2.Day, 0, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeMilliseconds();
-        var sevenDaysAgo = now2.AddDays(-_cacheDays).ToUnixTimeMilliseconds();
+        var now2 = NowBeijing;
+        var todayStart2 = new DateTime(now2.Year, now2.Month, now2.Day, 0, 0, 0);
+        var sevenDaysAgoDt = now2.AddDays(-_cacheDays);
 
         var todayErrorCount2 = await db.ErrorLogs
-            .Where(l => l.Level == "error" && l.TimeMs >= todayStart2)
+            .Where(l => l.Level == "error" && l.CreatedAt >= todayStart2)
             .CountAsync();
 
         var totalCount2 = await db.ErrorLogs
-            .Where(l => l.TimeMs >= sevenDaysAgo)
+            .Where(l => l.CreatedAt >= sevenDaysAgoDt)
             .CountAsync();
 
         var lastLogTime2 = await db.ErrorLogs
-            .OrderByDescending(l => l.TimeMs)
+            .OrderByDescending(l => l.CreatedAt)
             .Select(l => (long?)l.TimeMs)
             .FirstOrDefaultAsync();
 
@@ -181,6 +194,7 @@ public class LogCacheService
 
     /// <summary>
     /// 重建缓存（加锁，原子替换引用）
+    /// 时间过滤基于 CreatedAt，不依赖 TimeMs
     /// </summary>
     private async Task RebuildCacheAsync()
     {
@@ -189,13 +203,13 @@ public class LogCacheService
         {
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-            var now = DateTimeOffset.UtcNow.AddHours(8);
-            var sevenDaysAgo = now.AddDays(-_cacheDays).ToUnixTimeMilliseconds();
+            var now = NowBeijing;
+            var sevenDaysAgoDt = now.AddDays(-_cacheDays);
 
             logs = await db.ErrorLogs
                 .AsNoTracking()
-                .Where(l => l.TimeMs >= sevenDaysAgo)
-                .OrderByDescending(l => l.TimeMs)
+                .Where(l => l.CreatedAt >= sevenDaysAgoDt)
+                .OrderByDescending(l => l.CreatedAt)
                 .Take(_maxLogs)
                 .Select(l => new LogItemDto
                 {
@@ -222,8 +236,9 @@ public class LogCacheService
 
     /// <summary>
     /// 从缓存查询
+    /// 时间过滤基于 CreatedAt，不依赖 TimeMs
     /// </summary>
-    private LogPagedResultDto QueryFromCache(LogCacheData cache, LogQueryDto query)
+    private LogPagedResultDto QueryFromCache(LogCacheData cache, LogQueryDto query, DateTime? startDt, DateTime? endDt)
     {
         var logs = cache.AllLogs.AsEnumerable();
 
@@ -243,11 +258,11 @@ public class LogCacheService
         if (!string.IsNullOrWhiteSpace(query.keyword))
             logs = logs.Where(l => l.Msg.Contains(query.keyword));
 
-        if (query.start_time > 0)
-            logs = logs.Where(l => l.TimeMs >= query.start_time);
+        if (startDt.HasValue)
+            logs = logs.Where(l => l.CreatedAt >= startDt.Value);
 
-        if (query.end_time > 0)
-            logs = logs.Where(l => l.TimeMs <= query.end_time);
+        if (endDt.HasValue)
+            logs = logs.Where(l => l.CreatedAt <= endDt.Value);
 
         var total = logs.Count();
 
@@ -269,8 +284,9 @@ public class LogCacheService
 
     /// <summary>
     /// 直接从 DB 查询
+    /// 时间过滤基于 CreatedAt，不依赖 TimeMs
     /// </summary>
-    private async Task<LogPagedResultDto> QueryFromDbAsync(LogQueryDto query)
+    private async Task<LogPagedResultDto> QueryFromDbAsync(LogQueryDto query, DateTime? startDt, DateTime? endDt)
     {
         using var scope = _sp.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -292,11 +308,11 @@ public class LogCacheService
         if (!string.IsNullOrWhiteSpace(query.keyword))
             queryable = queryable.Where(l => l.Msg.Contains(query.keyword));
 
-        if (query.start_time > 0)
-            queryable = queryable.Where(l => l.TimeMs >= query.start_time);
+        if (startDt.HasValue)
+            queryable = queryable.Where(l => l.CreatedAt >= startDt.Value);
 
-        if (query.end_time > 0)
-            queryable = queryable.Where(l => l.TimeMs <= query.end_time);
+        if (endDt.HasValue)
+            queryable = queryable.Where(l => l.CreatedAt <= endDt.Value);
 
         var total = await queryable.CountAsync();
 
@@ -304,7 +320,7 @@ public class LogCacheService
         var pageSize = Math.Clamp(query.page_size, 1, 100);
 
         var items = await queryable
-            .OrderByDescending(l => l.TimeMs)
+            .OrderByDescending(l => l.CreatedAt)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .Select(l => new LogItemDto
@@ -332,23 +348,22 @@ public class LogCacheService
     }
 
     /// <summary>
-    /// 清理过期数据
+    /// 清理过期数据（基于 CreatedAt）
     /// </summary>
     private void CleanupExpiredData()
     {
         if (_cache == null) return;
 
-        var now = DateTimeOffset.UtcNow.AddHours(8);
-        var cutoff = now.AddDays(-_cacheDays).ToUnixTimeMilliseconds();
+        var cutoff = NowBeijing.AddDays(-_cacheDays);
 
         // 移除7天前的数据
-        _cache.AllLogs.RemoveAll(l => l.TimeMs < cutoff);
+        _cache.AllLogs.RemoveAll(l => l.CreatedAt < cutoff);
 
         // 如果还超过上限，按时间倒序保留最新的
         if (_cache.AllLogs.Count > _maxLogs)
         {
             _cache.AllLogs = _cache.AllLogs
-                .OrderByDescending(l => l.TimeMs)
+                .OrderByDescending(l => l.CreatedAt)
                 .Take(_maxLogs)
                 .ToList();
         }

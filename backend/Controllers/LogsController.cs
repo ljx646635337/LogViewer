@@ -114,17 +114,15 @@ public class LogsController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<LogPagedResultDto>> Query([FromQuery] LogQueryDto query)
     {
-        // 空值时设置默认值：start_time 当天 00:00，end_time 当前时间
-        var nowTs = DateTimeOffset.UtcNow.AddHours(8).ToUnixTimeMilliseconds();
-        var todayStartTs = new DateTimeOffset(DateTime.UtcNow.Date.AddHours(8)).ToUnixTimeMilliseconds();
+        // 空值时设置默认值：start_time 当天 00:00（东八区），end_time 当前时间
+        var nowBeijing = DateTimeOffset.UtcNow.AddHours(8);
+        var nowTs = nowBeijing.ToUnixTimeMilliseconds();
+        var todayStartTs = new DateTimeOffset(nowBeijing.Year, nowBeijing.Month, nowBeijing.Day, 0, 0, 0, TimeSpan.FromHours(8)).ToUnixTimeMilliseconds();
         var effectiveStartTime = query.start_time > 0 ? query.start_time : todayStartTs;
         var effectiveEndTime = query.end_time > 0 ? query.end_time : nowTs;
 
         query.start_time = effectiveStartTime;
         query.end_time = effectiveEndTime;
-
-        _logger.LogInformation("[Query] start_time={StartTime} end_time={EndTime} level={Level} cluster={Cluster}",
-            effectiveStartTime, effectiveEndTime, query.level, query.cluster_name);
 
         // 走缓存服务
         var result = await _cache.QueryAsync(query);

@@ -105,7 +105,7 @@
                 <input type="text" class="lv-input" v-model="filters.tag" placeholder="输入标签..." />
             </div>
             <div class="lv-filter-item">
-                <label>时间范围</label>
+                <label>报错时间范围</label>
                 <div class="dtp-wrap">
                     <input class="lv-input dtp-input" id="dtpStart" type="datetime-local" value="@todayStart.ToString(fmt)" />
                     <span style="padding:0 6px;color:#666;font-size:12px">至</span>
@@ -130,7 +130,8 @@
             <table class="lv-table" v-if="logs.length > 0">
                 <thead>
                     <tr>
-                        <th style="width:140px">时间</th>
+                        <th style="width:160px">报错时间</th>
+                        <th style="width:160px">服务器时间</th>
                         <th style="width:80px">级别</th>
                         <th style="width:120px">集群</th>
                         <th style="width:120px">节点</th>
@@ -142,6 +143,7 @@
                 <tbody>
                     <template v-for="log in logs" :key="log.id">
                         <tr class="lv-row">
+                            <td class="lv-time">{{formatTime(log.created_at)}}</td>
                             <td class="lv-time">{{formatTime(log.time_ms)}}</td>
                             <td><span :class="'lv-level lv-level-' + log.level">{{log.level}}</span></td>
                             <td><span class="lv-tag">{{log.cluster_name || '—'}}</span></td>
@@ -408,7 +410,7 @@ const app = createApp({
             toggleTestPanel, search, gotoPage, refreshWithCooldown, onFilterChange, onPageSizeChange,
             toggleTraceback, formatTime
         };
-    }
+    },
 });
 
 app.mount('#app');
